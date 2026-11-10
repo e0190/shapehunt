@@ -1,0 +1,8 @@
+name = "shapehunt"
+pages_build_output_dir = "public"
+compatibility_date = "2025-09-01"
+
+[[d1_databases]]
+binding = "DB"
+database_name = "shapehunt"
+database_id = "65b9864d-7619-49e2-8e78-e32b8510cdea"

@@ -1,0 +1,279 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Shape Hunt</title>
+<style>
+:root{
+  --bg:#ffffff; --card:#ffffff; --ink:#222; --muted:#666; --line:#bdbdbd;
+  --accent:#2f6fc0; --accent-ink:#fff; --good:#2e7d32; --bad:#c62828; --stroke:#1e3a5f;
+  --bar:#2f74c8; --pick:#8a1c5f;
+}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);font:16px/1.4 system-ui,Segoe UI,sans-serif}
+header{display:flex;justify-content:space-between;align-items:center;gap:12px;padding:12px 20px;background:var(--bar);color:#fff}
+h1{font-size:21px;margin:0;font-weight:400}
+.code{font-size:14px;color:#dbe7f7} .code b{color:#fff;font-size:18px;letter-spacing:2px}
+.solid{width:100%;height:100%;display:block;padding:6%}
+.solid polygon{stroke:#1f5a9e;stroke-width:1.1;stroke-linejoin:round}
+main{display:grid;grid-template-columns:minmax(0,1fr) 340px;gap:20px;max-width:1080px;margin:0 auto;padding:16px}
+@media (max-width:800px){main{grid-template-columns:1fr}}
+.board{display:grid;grid-template-columns:repeat(4,1fr);gap:10px}
+.card{position:relative;aspect-ratio:1;background:#fff;border:2px solid var(--line);transition:opacity .2s}
+.board{max-width:560px}
+.board.click .card{cursor:pointer}
+.board.click .card:hover{border-color:#888}
+.card.out{opacity:.25}
+.card.secret{border:4px solid var(--pick)}
+.board.guessing .card:not(.out){border-color:var(--pick);border-style:dashed}
+.panel{background:#fff;border:1px solid var(--line);border-radius:2px;padding:16px;display:flex;flex-direction:column;gap:12px;align-self:start}
+.label{font-size:12px;text-transform:uppercase;letter-spacing:1px;color:var(--muted)}
+.role{font-size:18px;font-weight:600}
+input,button{font:inherit;border-radius:8px;border:1px solid var(--line);padding:10px 12px;background:var(--bg);color:var(--ink)}
+input{width:100%}
+button{cursor:pointer}
+button.primary{background:var(--accent);color:var(--accent-ink);border-color:var(--accent);font-weight:600}
+button:disabled{opacity:.45;cursor:default}
+.row{display:flex;gap:8px;flex-wrap:wrap}.row>*{flex:1}
+.msg{font-size:15px}
+.big{font-size:18px;font-weight:600}
+.log{font-size:14px;max-height:260px;overflow:auto;border-top:1px solid var(--line);padding-top:8px;display:flex;flex-direction:column;gap:6px}
+.log .n{color:var(--muted);font-size:12px}
+.yes{color:var(--good);font-weight:600}.no{color:var(--bad);font-weight:600}
+.lobby{max-width:420px;margin:40px auto;padding:0 16px;display:flex;flex-direction:column;gap:14px}
+.lobby .panel{gap:10px}
+.err{color:var(--bad);font-size:14px;min-height:1.2em}
+.overlay{position:fixed;inset:0;background:#0008;display:none;align-items:center;justify-content:center;padding:16px}
+.overlay.show{display:flex}
+.modal{background:var(--card);border-radius:14px;padding:24px;max-width:420px;width:100%;text-align:center}
+.modal .card{width:140px;margin:12px auto}
+.modal h2{margin:0 0 6px}
+.hidden{display:none!important}
+</style>
+</head>
+<body>
+<header><h1>Shape Hunt</h1><div class="code" id="codeBox"></div></header>
+
+<div class="lobby" id="lobby">
+  <p class="msg">One player secretly picks a shape. The other types yes/no questions and crosses shapes out until they can guess it.</p>
+  <div class="panel">
+    <div class="label">Start a game</div>
+    <button class="primary" data-create="1">Create a room</button>
+    <div class="msg" style="font-size:14px;color:var(--muted)">Who picks and who guesses is random each round.</div>
+  </div>
+  <div class="panel">
+    <div class="label">Join a friend</div>
+    <div class="row"><input id="joinCode" maxlength="4" placeholder="Room code" autocomplete="off" style="text-transform:uppercase"><button id="joinBtn">Join</button></div>
+  </div>
+  <div class="err" id="lobbyErr"></div>
+</div>
+
+<main id="game" class="hidden">
+  <section><div class="board" id="board"></div></section>
+  <aside class="panel">
+    <div><div class="label">You are the</div><div class="role" id="role"></div></div>
+    <div id="controls"></div>
+    <div class="err" id="err"></div>
+    <div class="label">Questions asked: <b id="qCount">0</b></div>
+    <div class="log" id="log"></div>
+  </aside>
+</main>
+<div class="overlay" id="ov"><div class="modal" id="modal"></div></div>
+
+<script>
+// The rooms live on shapehunt.pages.dev; copies elsewhere (GitHub, .ek) call it there.
+const API = location.hostname.endsWith('shapehunt.pages.dev') ? '' : 'https://shapehunt.pages.dev';
+function star(){let p=[];for(let i=0;i<10;i++){const r=i%2?17:42,a=(-90+36*i)*Math.PI/180;p.push((50+r*Math.cos(a)).toFixed(1)+','+(54+r*Math.sin(a)).toFixed(1))}return `<polygon points="${p.join(' ')}"/>`}
+const P=s=>`<polygon points="${s}"/>`;
+const SHAPES=[
+ P("50,12 90,82 10,82"), P("20,15 20,85 85,85"), P("18,18 82,18 82,82 18,82"), P("8,30 92,30 92,70 8,70"),
+ P("50,6 78,50 50,94 22,50"), P("30,25 70,25 92,75 8,75"), P("50,12 88,39.6 73.5,84.4 26.5,84.4 12,39.6"),
+ P("30,15.4 70,15.4 90,50 70,84.6 30,84.6 10,50"), P("15,10 40,10 40,60 88,60 88,85 15,85"), star(),
+ `<circle cx="50" cy="50" r="40"/>`, `<path d="M10,68 A40,40 0 0 1 90,68 Z"/>`,
+ `<path d="M60,10 A40,40 0 1 0 60,90 A50,50 0 0 1 60,10 Z"/>`, P("15,20 85,80 85,20 15,80"),
+ `<polyline points="8,70 29,30 50,70 71,30 92,70"/>`, `<path d="M8,50 C22,8 40,8 50,50 S78,92 92,50"/>`,
+];
+// ---- 3D solids drawn as crisp vectors ----
+const D=Math.PI/180;
+const ngon=(n,r,rx=r,off=0)=>[...Array(n)].map((_,i)=>{const a=(off+360*i/n)*D;return [rx*Math.cos(a),r*Math.sin(a)]});
+function prism(poly,h,top=1){ // poly in x/z, extruded up y
+  const n=poly.length,v=[];poly.forEach(([x,z])=>v.push([x,-h/2,z]));poly.forEach(([x,z])=>v.push([x*top,h/2,z*top]));
+  const f=[[...Array(n).keys()],[...Array(n).keys()].map(i=>i+n)];
+  for(let i=0;i<n;i++)f.push([i,(i+1)%n,(i+1)%n+n,i+n]);return {v,f}}
+function pyramid(poly,h){const n=poly.length,v=poly.map(([x,z])=>[x,-h/3,z]);v.push([0,2*h/3,0]);
+  const f=[[...Array(n).keys()]];for(let i=0;i<n;i++)f.push([i,(i+1)%n,n]);return {v,f}}
+function octa(r){const v=[[r,0,0],[0,0,r],[-r,0,0],[0,0,-r],[0,r*1.15,0],[0,-r*1.15,0]],f=[];
+  for(let i=0;i<4;i++){f.push([i,(i+1)%4,4]);f.push([i,(i+1)%4,5])}return {v,f}}
+const rect=(w,d)=>[[-w/2,-d/2],[w/2,-d/2],[w/2,d/2],[-w/2,d/2]];
+// [solid, yaw, pitch, roll]
+const SOLIDS=[
+ [prism(ngon(3,.7,.7,90),1.8),30,25,90],  // lying triangular prism
+ [pyramid(ngon(3,1),.75),25,22,0],        // flat tetrahedron
+ [prism(ngon(6,.55),2.1),15,18,0],        // hexagonal prism
+ [prism(rect(.75,.75),2.4),35,16,0],      // square prism
+ [prism(ngon(5,1),.75),12,24,0],          // pentagonal prism
+ [prism(rect(1.8,1),1.05),25,22,0],       // box
+ [prism(ngon(3,.6),2.3),40,14,0],         // tall triangular prism
+ [pyramid(ngon(3,.5),2.2),30,14,0],       // tall triangle pyramid
+ [pyramid(ngon(3,1.25),.6),10,38,0],      // flat wide pyramid
+ [pyramid(ngon(3,.38),2.4),70,12,0],      // thin spike
+ [pyramid(ngon(5,1.25,1.25,10),.5),20,28,0],// low pentagonal pyramid
+ [pyramid(rect(1,1),2),25,12,0],          // square pyramid
+ [prism([[-1,-.35],[1,-.35],[.6,.35],[-.6,.35]],1.6),35,25,90], // lying trapezoid prism
+ [prism(rect(.9,.9),2.2,.6),20,12,0],     // tall frustum
+ [prism(rect(1.2,1.2),1.2),35,28,12],     // cube
+ [octa(1),20,22,0],                       // octahedron
+];
+function rot([x,y,z],yaw,pitch,roll){
+  let c=Math.cos(roll*D),s=Math.sin(roll*D);[x,y]=[x*c-y*s,x*s+y*c];
+  c=Math.cos(yaw*D);s=Math.sin(yaw*D);[x,z]=[x*c+z*s,-x*s+z*c];
+  c=Math.cos(pitch*D);s=Math.sin(pitch*D);[y,z]=[y*c-z*s,y*s+z*c];return [x,y,z]}
+const sub=(a,b)=>a.map((v,i)=>v-b[i]),cross=(a,b)=>[a[1]*b[2]-a[2]*b[1],a[2]*b[0]-a[0]*b[2],a[0]*b[1]-a[1]*b[0]],dot=(a,b)=>a[0]*b[0]+a[1]*b[1]+a[2]*b[2];
+const LIGHT=(()=>{const l=[-.55,.75,.35],m=Math.hypot(...l);return l.map(x=>x/m)})();
+function solidSVG([s,yaw,pitch,roll]){
+  const v=s.v.map(p=>rot(p,yaw,pitch,roll)),c=v.reduce((a,p)=>a.map((x,i)=>x+p[i]/v.length),[0,0,0]);
+  const xs=v.map(p=>p[0]),ys=v.map(p=>-p[1]);
+  const minX=Math.min(...xs),maxX=Math.max(...xs),minY=Math.min(...ys),maxY=Math.max(...ys);
+  const k=86/Math.max(maxX-minX,maxY-minY),ox=50-(minX+maxX)/2*k,oy=50-(minY+maxY)/2*k;
+  let out='';
+  for(const f of s.f){
+    const p=f.map(i=>v[i]);let n=cross(sub(p[1],p[0]),sub(p[2],p[0]));
+    const fc=p.reduce((a,q)=>a.map((x,i)=>x+q[i]/p.length),[0,0,0]);
+    if(dot(n,sub(fc,c))<0)n=n.map(x=>-x);
+    if(n[2]<=1e-6)continue;
+    const m=Math.hypot(...n),b=Math.max(0,dot(n.map(x=>x/m),LIGHT));
+    const t=.15+.85*b, col=`rgb(${Math.round(95+(228-95)*t)},${Math.round(158+(238-158)*t)},${Math.round(226+(251-226)*t)})`;
+    out+=`<polygon points="${p.map(q=>(q[0]*k+ox).toFixed(2)+','+(-q[1]*k+oy).toFixed(2)).join(' ')}" fill="${col}"/>`;
+  }
+  return `<svg viewBox="0 0 100 100" class="solid">${out}</svg>`;
+}
+const ART=SOLIDS.map(solidSVG);
+const cardHTML=i=>ART[i];
+const $=id=>document.getElementById(id);
+const esc=s=>s.replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+
+let me; try{me=localStorage.getItem('sh-me')}catch(e){}
+if(!me){me=Math.random().toString(36).slice(2)+Date.now().toString(36);try{localStorage.setItem('sh-me',me)}catch(e){}}
+let code=null, S=null, localOut=new Set(), guessing=false, busy=false, lastVer=-1, lastPhase=null;
+
+async function api(body){
+  const r=await fetch(API+'/api/room',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({me,code,...body})});
+  const d=await r.json(); if(!r.ok)throw new Error(d.error||'Something went wrong'); return d;
+}
+async function act(body){
+  if(busy)return; busy=true; $('err').textContent='';
+  try{const d=await api(body); apply(d.state)}catch(e){$('err').textContent=e.message}
+  busy=false;
+}
+async function enter(d){
+  code=d.code; history.replaceState(null,'','?room='+code);
+  $('lobby').classList.add('hidden'); $('game').classList.remove('hidden');
+  $('codeBox').innerHTML=`Room <b>${code}</b>`; apply(d.state); poll();
+}
+document.querySelectorAll('[data-create]').forEach(b=>b.onclick=async()=>{
+  try{code=null;enter(await api({action:'create'}))}catch(e){$('lobbyErr').textContent=e.message}});
+async function join(c){
+  code=c.trim().toUpperCase(); if(!code)return;
+  try{enter(await api({action:'join'}))}catch(e){$('lobbyErr').textContent=e.message;code=null;history.replaceState(null,'',location.pathname)}
+}
+$('joinBtn').onclick=()=>join($('joinCode').value);
+$('joinCode').onkeydown=e=>{if(e.key==='Enter')join($('joinCode').value)};
+
+async function poll(){
+  try{const r=await fetch(API+`/api/room?code=${code}&me=${encodeURIComponent(me)}`,{cache:'no-store'});
+    if(r.ok){const s=await r.json(); if(s.ver!==lastVer)apply(s)}}catch(e){}
+  setTimeout(poll,document.hidden?4000:1500);
+}
+
+function apply(s){
+  const newRound=S&&s.phase!=='over'&&s.q.length===0&&S.q.length>0;
+  if(!S||newRound||s.role!==S.role||(s.role==='picker')||s.phase==='over')localOut=new Set(s.out);
+  if(s.phase==='over'||s.phase!=='ask')guessing=false;
+  S=s; lastVer=s.ver; render();
+  if(s.phase!==lastPhase&&s.phase!=='over'&&document.hidden)document.title='(!) Shape Hunt';
+  lastPhase=s.phase;
+}
+document.addEventListener('visibilitychange',()=>{if(!document.hidden)document.title='Shape Hunt'});
+
+function render(){
+  const isP=S.role==='picker', isG=S.role==='guesser';
+  $('role').textContent=S.phase==='waiting'?'(decided when your friend joins)':isP?'Picker':isG?'Guesser':'Spectator';
+  $('qCount').textContent=S.q.length;
+  // board
+  const b=$('board'); b.innerHTML='';
+  const canTap=(isP&&S.phase==='pick')||(isG&&['ask','answer','elim'].includes(S.phase));
+  b.className='board'+(canTap?' click':'')+(guessing?' guessing':'');
+  const out=isG?localOut:new Set(S.out);
+  S.order.forEach(i=>{
+    const c=document.createElement('div'); c.className='card'; c.innerHTML=cardHTML(i);
+    if(out.has(i))c.classList.add('out');
+    if(isP&&S.secret===i)c.classList.add('secret');
+    c.onclick=()=>tap(i); b.appendChild(c);
+  });
+  // log
+  $('log').innerHTML=S.q.slice().reverse().map((q,k)=>`<div><span class="n">Q${S.q.length-k}</span> ${esc(q.t)} ${q.a?`<span class="${q.a}">${q.a==='yes'?'Yes':'No'}</span>`:'<span class="n">waiting...</span>'}</div>`).join('');
+  controls(isP,isG);
+  // end screen
+  if(S.phase==='over'&&S.result)showEnd(isG); else $('ov').classList.remove('show');
+}
+
+function controls(isP,isG){
+  const c=$('controls'), ph=S.phase;
+  const wait=t=>c.innerHTML=`<div class="msg">${t}</div>`;
+  if(ph==='waiting'){wait(`Waiting for a friend. Send them the code <b>${code}</b> or this page's link.`);return}
+  if(isP){
+    if(ph==='pick'){wait('<span class="big">Tap the shape you want to hide.</span>');return}
+    if(ph==='answer'){
+      const q=S.q[S.q.length-1].t;
+      c.innerHTML=`<div class="label">They ask</div><div class="big">${esc(q)}</div>
+        <div class="row" style="margin-top:8px"><button class="primary" id="y">Yes</button><button class="primary" id="n">No</button></div>`;
+      $('y').onclick=()=>act({action:'answer',answer:true}); $('n').onclick=()=>act({action:'answer',answer:false}); return}
+    if(ph==='ask'){wait('The guesser is thinking of a question...');return}
+    if(ph==='elim'){wait('The guesser is crossing out shapes...');return}
+  }
+  if(isG){
+    if(ph==='pick'){wait('Your friend is picking a secret shape...');return}
+    if(ph==='ask'){
+      if(guessing){c.innerHTML=`<div class="big">Tap the shape you think it is.</div><button id="cancel" style="width:100%;margin-top:8px">Back</button>`;
+        $('cancel').onclick=()=>{guessing=false;render()};return}
+      c.innerHTML=`<div class="label">Ask a yes/no question</div>
+        <form id="qf" class="row"><input id="qt" maxlength="200" placeholder="Does it have curved edges?" autocomplete="off"><button class="primary" style="flex:0 0 auto">Ask</button></form>
+        <button id="guessBtn" style="width:100%;margin-top:8px">I know it, make a guess</button>`;
+      $('qf').onsubmit=e=>{e.preventDefault();const t=$('qt').value.trim();if(t)act({action:'ask',text:t})};
+      $('guessBtn').onclick=()=>{guessing=true;render()};
+      setTimeout(()=>$('qt')&&$('qt').focus(),0);return}
+    if(ph==='answer'){wait('Waiting for their answer...');return}
+    if(ph==='elim'){
+      const a=S.q[S.q.length-1].a;
+      c.innerHTML=`<div class="msg">They said <span class="${a}">${a==='yes'?'Yes':'No'}</span>. Tap the shapes this rules out, then press Done.</div>
+        <button class="primary" id="done" style="width:100%;margin-top:8px">Done</button>`;
+      $('done').onclick=()=>act({action:'elim',out:[...localOut]});return}
+  }
+  c.innerHTML='';
+}
+
+function tap(i){
+  if(!S||busy)return;
+  if(S.role==='picker'&&S.phase==='pick'){act({action:'pick',card:i});return}
+  if(S.role!=='guesser'||!['ask','answer','elim'].includes(S.phase))return;
+  if(guessing){if(!localOut.has(i))act({action:'guess',card:i});return}
+  localOut.has(i)?localOut.delete(i):localOut.add(i); render();
+}
+
+function showEnd(isG){
+  const r=S.result, guesserWon=r.win;
+  const iWon=isG?guesserWon:!guesserWon;
+  const why=r.reason==='guessed'?`The secret shape was found in ${S.q.length} question${S.q.length===1?'':'s'}.`
+    :r.reason==='wrong'?'Wrong guess.':'The secret shape got crossed out.';
+  $('modal').innerHTML=`<h2 style="color:var(${iWon?'--good':'--bad'})">${iWon?'You win':'You lose'}</h2><div>${why}</div>
+    <div class="label" style="margin-top:12px">The secret shape</div><div class="card">${cardHTML(S.secret)}</div>
+    <button class="primary" id="again">Play again</button>`;
+  $('again').onclick=()=>act({action:'again'});
+  $('ov').classList.add('show');
+}
+
+const pre=new URLSearchParams(location.search).get('room'); if(pre)join(pre);
+</script>
+</body>
+</html>
